@@ -10,9 +10,15 @@
 #pragma once
 
 #include "buffer/replacer.h"
-#include "hash/extendible_hash.h"
+#include <unordered_map>
+#include <mutex>
 
 namespace cmudb {
+
+template <typename T> struct LRUNode {
+  T data;
+  LRUNode *prev, *next;
+};
 
 template <typename T> class LRUReplacer : public Replacer<T> {
 public:
@@ -30,7 +36,22 @@ public:
   size_t Size();
 
 private:
-  // add your member variables here
+  std::mutex mtx;
+  std::unordered_map<T, LRUNode<T> *> cache;
+  LRUNode<T> *head, *tail;
+  size_t size;
+  void attach(LRUNode<T> *node) {
+    head->next->prev = node;
+    node->next = head->next;
+    node->prev = head;
+    head->next = node;
+  }
+  void detach(LRUNode<T> *node) {
+    node->next->prev = node->prev;
+    node->prev->next = node->next;
+    node->next = nullptr;
+    node->prev = nullptr;
+  }
 };
 
 } // namespace cmudb
