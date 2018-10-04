@@ -8,8 +8,8 @@ namespace cmudb {
  * WARNING: Do Not Edit This Function
  */
 BufferPoolManager::BufferPoolManager(size_t pool_size,
-                                                 DiskManager *disk_manager,
-                                                 LogManager *log_manager)
+                                     DiskManager *disk_manager,
+                                     LogManager *log_manager)
     : pool_size_(pool_size), disk_manager_(disk_manager),
       log_manager_(log_manager) {
   // a consecutive memory space for buffer pool
@@ -46,7 +46,40 @@ BufferPoolManager::~BufferPoolManager() {
  * 4. Update page metadata, read page content from disk file and return page
  * pointer
  */
-Page *BufferPoolManager::FetchPage(page_id_t page_id) { return nullptr; }
+Page *BufferPoolManager::FetchPage(page_id_t page_id) {
+  Page *p;
+  if (page_table_->Find(page_id, p)) {
+    p->pin_count_++;
+    return p;
+  } else {
+    Page *frame = nullptr;
+    if (!free_list_->empty()) {
+      frame = free_list_->front();
+      free_list_->pop_front();
+      frame->page_id_ = page_id;
+    } else {
+      if (replacer_->Victim(frame)) {
+        if (frame->is_dirty_) {
+          frame->WLatch();
+          disk_manager_->WritePage(frame->GetPageId(), frame->GetData());
+          frame->WUnlatch();
+        }
+      }
+    }
+    // frame may be nullptr
+    if (frame) {
+      page_table_->Remove(frame->GetPageId());
+      frame->pin_count_ = 1;
+      frame->is_dirty_ = false;
+      frame->page_id_ = page_id;
+      frame->ResetMemory();
+      disk_manager_->ReadPage(page_id, frame->GetData());
+      replacer_->Erase(frame);
+      page_table_->Insert(page_id, frame);
+    }
+    return frame;
+  }
+}
 
 /*
  * Implementation of unpin page
@@ -55,6 +88,21 @@ Page *BufferPoolManager::FetchPage(page_id_t page_id) { return nullptr; }
  * dirty flag of this page
  */
 bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
+  Page *p;
+  if (page_table_->Find(page_id, p)) {
+    if (is_dirty) {
+      p->is_dirty_ = true;
+    }
+    if (p->GetPinCount() > 0) {
+      p->pin_count_--;
+      if (p->GetPinCount() == 0) {
+        replacer_->Insert(p);
+      }
+      return true;
+    } else {
+      return false;
+    }
+  }
   return false;
 }
 
@@ -64,7 +112,17 @@ bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
  * if page is not found in page table, return false
  * NOTE: make sure page_id != INVALID_PAGE_ID
  */
-bool BufferPoolManager::FlushPage(page_id_t page_id) { return false; }
+bool BufferPoolManager::FlushPage(page_id_t page_id) {
+  Page *p;
+  if (page_id != INVALID_PAGE_ID && page_table_->Find(page_id, p)) {
+    p->WLatch();
+    disk_manager_->WritePage(page_id, p->GetData());
+    p->WUnlatch();
+    return true;
+  } else {
+    return false;
+  }
+}
 
 /**
  * User should call this method for deleting a page. This routine will call
@@ -74,7 +132,24 @@ bool BufferPoolManager::FlushPage(page_id_t page_id) { return false; }
  * call disk manager's DeallocatePage() method to delete from disk file. If
  * the page is found within page table, but pin_count != 0, return false
  */
-bool BufferPoolManager::DeletePage(page_id_t page_id) { return false; }
+bool BufferPoolManager::DeletePage(page_id_t page_id) {
+  Page *p;
+  if (page_table_->Find(page_id, p)) {
+    if (p->GetPinCount() != 0) {
+      return false;
+    }
+    page_table_->Remove(page_id);
+    p->is_dirty_ = false;
+    p->pin_count_ = 0;
+    p->page_id_ = INVALID_PAGE_ID;
+    p->ResetMemory();
+    free_list_->push_back(p);
+    disk_manager_->DeallocatePage(page_id);
+    return true;
+  } else {
+    return false;
+  }
+}
 
 /**
  * User should call this method if needs to create a new page. This routine
@@ -84,5 +159,41 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) { return false; }
  * update new page's metadata, zero out memory and add corresponding entry
  * into page table. return nullptr if all the pages in pool are pinned
  */
-Page *BufferPoolManager::NewPage(page_id_t &page_id) { return nullptr; }
+Page *BufferPoolManager::NewPage(page_id_t &page_id) {
+  bool allPinned = true;
+  for (size_t i = 0; i < pool_size_; ++i) {
+    if (pages_[i].GetPinCount() == 0) {
+      allPinned = false;
+      break;
+    }
+  }
+  if (allPinned)
+    return nullptr;
+
+  page_id = disk_manager_->AllocatePage();
+  Page *frame = nullptr;
+  if (!free_list_->empty()) {
+    frame = free_list_->front();
+    free_list_->pop_front();
+  } else {
+    if (replacer_->Victim(frame)) {
+      if (frame->is_dirty_) {
+        frame->WLatch();
+        disk_manager_->WritePage(frame->GetPageId(), frame->GetData());
+        frame->WUnlatch();
+      }
+    }
+  }
+  // frame may be nullptr
+  if (frame) {
+    page_table_->Remove(frame->GetPageId());
+    frame->page_id_ = page_id;
+    frame->pin_count_ = 1;
+    frame->is_dirty_ = false;
+    frame->ResetMemory();
+    replacer_->Erase(frame);
+    page_table_->Insert(page_id, frame);
+  }
+  return frame;
+}
 } // namespace cmudb
