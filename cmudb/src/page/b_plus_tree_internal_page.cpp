@@ -18,20 +18,33 @@ namespace cmudb {
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id,
-                                          page_id_t parent_id) {}
+                                          page_id_t parent_id) {
+  page_type_ = IndexPageType::INTERNAL_PAGE;
+  size_ = 1; // must have one invalid key
+  page_id_ = page_id;
+  parent_page_id_ = parent_id;
+  max_size_ = 4; // 3 valid keys
+}
 /*
  * Helper method to get/set the key associated with input "index"(a.k.a
  * array offset)
  */
 INDEX_TEMPLATE_ARGUMENTS
 KeyType B_PLUS_TREE_INTERNAL_PAGE_TYPE::KeyAt(int index) const {
-  // replace with your own code
-  KeyType key;
+  if (index >= size_)
+    return 0;
+  MappingType pair = array[index];
+  KeyType key = pair.first();
   return key;
 }
 
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {}
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {
+  if (index >= size_)
+    return 0;
+  MappingType pair = array[index];
+  pair.first = key;
+}
 
 /*
  * Helper method to find and return array index(or offset), so that its value
@@ -39,6 +52,12 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {}
  */
 INDEX_TEMPLATE_ARGUMENTS
 int B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const {
+  for (int i = 0; i < size_; i++) {
+    MappingType pair = array[index];
+    ValueType v = pair.second();
+    if (v == value)
+      return i;
+  }
   return 0;
 }
 
@@ -47,7 +66,13 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const {
  * offset)
  */
 INDEX_TEMPLATE_ARGUMENTS
-ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const { return 0; }
+ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const {
+  if (index >= size_)
+    return 0;
+  MappingType pair = array[index];
+  ValueType value = pair.second();
+  return value;
+}
 
 /*****************************************************************************
  * LOOKUP
@@ -61,7 +86,15 @@ INDEX_TEMPLATE_ARGUMENTS
 ValueType
 B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key,
                                        const KeyComparator &comparator) const {
-  return INVALID_PAGE_ID;
+  if (size_ <= 1)
+    return INVALID_PAGE_ID;
+  for (int i = 1; i < size_; i++) {
+    int res = comparator(key, array[i].first());
+    if (res == -1 || res == 0) { // lt
+      return array[i - 1].second();
+    }
+  }
+  return array[size_ - 1].second();
 }
 
 /*****************************************************************************
@@ -76,7 +109,9 @@ B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key,
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::PopulateNewRoot(
     const ValueType &old_value, const KeyType &new_key,
-    const ValueType &new_value) {}
+    const ValueType &new_value) {
+      // TODO:
+    }
 /*
  * Insert new_key & new_value pair right after the pair with its value ==
  * old_value
@@ -97,8 +132,7 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveHalfTo(
-    BPlusTreeInternalPage *recipient,
-    BufferPoolManager *buffer_pool_manager) {}
+    BPlusTreeInternalPage *recipient, BufferPoolManager *buffer_pool_manager) {}
 
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyHalfFrom(
@@ -148,8 +182,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyAllFrom(
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveFirstToEndOf(
-    BPlusTreeInternalPage *recipient,
-    BufferPoolManager *buffer_pool_manager) {}
+    BPlusTreeInternalPage *recipient, BufferPoolManager *buffer_pool_manager) {}
 
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyLastFrom(
@@ -181,8 +214,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::QueueUpChildren(
     if (page == nullptr)
       throw Exception(EXCEPTION_TYPE_INDEX,
                       "all page are pinned while printing");
-    BPlusTreePage *node =
-        reinterpret_cast<BPlusTreePage *>(page->GetData());
+    BPlusTreePage *node = reinterpret_cast<BPlusTreePage *>(page->GetData());
     queue->push(node);
   }
 }
@@ -218,13 +250,13 @@ std::string B_PLUS_TREE_INTERNAL_PAGE_TYPE::ToString(bool verbose) const {
 
 // valuetype for internalNode should be page id_t
 template class BPlusTreeInternalPage<GenericKey<4>, page_id_t,
-                                           GenericComparator<4>>;
+                                     GenericComparator<4>>;
 template class BPlusTreeInternalPage<GenericKey<8>, page_id_t,
-                                           GenericComparator<8>>;
+                                     GenericComparator<8>>;
 template class BPlusTreeInternalPage<GenericKey<16>, page_id_t,
-                                           GenericComparator<16>>;
+                                     GenericComparator<16>>;
 template class BPlusTreeInternalPage<GenericKey<32>, page_id_t,
-                                           GenericComparator<32>>;
+                                     GenericComparator<32>>;
 template class BPlusTreeInternalPage<GenericKey<64>, page_id_t,
-                                           GenericComparator<64>>;
+                                     GenericComparator<64>>;
 } // namespace cmudb
